@@ -92,25 +92,75 @@ app.get('/faculty', (req, res) => {
     });
 });
 
-// Delete Faculty by ID API
 app.delete('/faculty/delete/:id', (req, res) => {
     const facultyId = req.params.id;
 
-    // SQL query to delete the faculty member by ID
-    const deleteFacultySql = 'DELETE FROM Faculty WHERE id = ?';
-    db.query(deleteFacultySql, [facultyId], (err, result) => {
+    // first dekhli j kon department e ache the faculty
+    const getFacultyDeptSql = 'SELECT dept FROM Faculty WHERE id = ?';
+    db.query(getFacultyDeptSql, [facultyId], (err, facultyResults) => {
         if (err) {
-            console.error('Error deleting faculty member:', err);
-            res.status(500).send('Error deleting faculty member');
+            console.error('Error fetching faculty department:', err);
+            res.status(500).send('Error in processing request');
             return;
         }
 
-        if (result.affectedRows === 0) {
+        if (facultyResults.length === 0) {
             res.status(404).send('Faculty member not found');
             return;
         }
 
-        res.send('Faculty member deleted successfully');
+        const dept = facultyResults[0].dept;
+
+        // now class er upor left join kore least class thaka faculty bar kor
+        const findMinClassFacultySql = `
+            SELECT f.id
+            FROM Faculty f
+            LEFT JOIN (SELECT faculty_id, COUNT(*) AS class_count FROM Class GROUP BY faculty_id) c ON f.id = c.faculty_id
+            WHERE f.dept = ? AND f.id != ?
+            ORDER BY c.class_count ASC
+            LIMIT 1`;
+
+        db.query(findMinClassFacultySql, [dept, facultyId], (err, minClassFaculties) => {
+            if (err) {
+                console.error('Error finding faculty with minimum classes:', err);
+                res.status(500).send('Error in processing request');
+                return;
+            }
+
+            if (minClassFaculties.length === 0) {
+                res.status(400).send('No other faculty available in department to reassign classes');
+                return;
+            }
+
+            const newFacultyId = minClassFaculties[0].id;
+
+            // ressign kor oi faculty k jar sob theke kom class
+            const updateClassesSql = 'UPDATE Class SET faculty_id = ? WHERE faculty_id = ?';
+            db.query(updateClassesSql, [newFacultyId, facultyId], (err, result) => {
+                if (err) {
+                    console.error('Error reassigning classes:', err);
+                    res.status(500).send('Error in updating classes');
+                    return;
+                }
+
+                // abar delete kor safely oi facult ta k
+                const deleteFacultySql = 'DELETE FROM Faculty WHERE id = ?';
+                db.query(deleteFacultySql, [facultyId], (err, result) => {
+                    if (err) {
+                        console.error('Error deleting faculty member:', err);
+                        res.status(500).send('Error deleting faculty member');
+                        return;
+                    }
+
+                    if (result.affectedRows === 0) {
+                        res.status(404).send('Faculty member not found');
+                        return;
+                    }
+
+                    res.send('Faculty member deleted and classes reassigned successfully');
+                });
+            });
+        });
     });
 });
 
